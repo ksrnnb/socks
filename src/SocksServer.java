@@ -12,18 +12,54 @@ public class SocksServer {
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             while (true) {
-                try (Socket socket = serverSocket.accept()) {
-
-                    InputStream in = socket.getInputStream();
-                    OutputStream out = socket.getOutputStream();
-
-                    byte[] buf = new byte[1024];
-                    int n;
-                    while ((n = in.read(buf)) != -1) {
-                        out.write(buf, 0, n);
+                Socket socket = serverSocket.accept();
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        handleAccept(socket);
+                    } catch (IOException e) {
+                        e.printStackTrace();
                     }
-                }
+                });
             }
+        }
+    }
+
+    private void handleAccept(Socket socket) throws IOException {
+        String targetHost = "example.com";
+        int targetPort = 80;
+
+        try (socket; Socket targetSocket = new Socket(targetHost, targetPort)) {
+
+            InputStream targetInput = targetSocket.getInputStream();
+            OutputStream targetOutput = targetSocket.getOutputStream();
+
+            InputStream in = socket.getInputStream();
+            OutputStream out = socket.getOutputStream();
+
+            Thread t = Thread.ofVirtual().start(() -> {
+                try {
+                    pump(targetInput, out);
+                    socket.shutdownOutput();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
+
+            pump(in, targetOutput);
+            targetSocket.shutdownOutput();
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void pump(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[1024];
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            out.write(buf, 0, n);
         }
     }
 }
