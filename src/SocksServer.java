@@ -10,14 +10,18 @@ public class SocksServer {
     public void run() throws IOException {
         System.out.println("socks server is running on localhost:" + port);
 
-        try (ServerSocket serverSocket = new ServerSocket(port);
-                Socket socket = serverSocket.accept()) {
-            InputStream in = socket.getInputStream();
-            OutputStream out = socket.getOutputStream();
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            while (true) {
+                try (Socket socket = serverSocket.accept()) {
 
-            int b;
-            while ((b = in.read()) != -1) {
-                out.write(b);
+                    InputStream in = socket.getInputStream();
+                    OutputStream out = socket.getOutputStream();
+
+                    int b;
+                    while ((b = in.read()) != -1) {
+                        out.write(b);
+                    }
+                }
             }
         }
     }
