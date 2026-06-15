@@ -17,9 +17,10 @@ public class SocksServer {
                     InputStream in = socket.getInputStream();
                     OutputStream out = socket.getOutputStream();
 
-                    int b;
-                    while ((b = in.read()) != -1) {
-                        out.write(b);
+                    byte[] buf = new byte[1024];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        out.write(buf, 0, n);
                     }
                 }
             }
