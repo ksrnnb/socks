@@ -89,8 +89,10 @@ public class SocksServer {
             return;
         }
 
-        byte[] authMethods = new byte[methodsNum];
-        in.readNBytes(authMethods, 0, methodsNum);
+        byte[] authMethods = in.readNBytes(methodsNum);
+        if (authMethods.length != methodsNum) {
+            throw new IllegalArgumentException("invalid auth methods");
+        }
 
         dump(requestId, "authMethods", authMethods, methodsNum);
         for (int i = 0; i < authMethods.length; i++) {
