@@ -11,7 +11,7 @@ public class SocksServer {
 
     private final int NO_AUTH_REQUIRED = 0x00;
 
-    private final int NO_ACCEPTABLE_METHODS = 0x00;
+    private final int NO_ACCEPTABLE_METHODS = 0xFF;
 
     public void run() throws IOException {
         System.out.println("socks server is running on localhost:" + port);
