@@ -1,8 +1,10 @@
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 
 public class SocksServer {
     private final int port = 1080;
@@ -16,6 +18,7 @@ public class SocksServer {
     private final int CMD_CONNECT = 0x01;
 
     private final int REPLY_SUCCEEDED = 0x00;
+    private final int REPLY_HOST_UNREACHABLE = 0x04;
     private final int REPLY_CONNECTION_REFUSED = 0x05;
     private final int REPLY_COMMAND_NOT_SUPPORTED = 0x07;
     private final int REPLY_ADDRESS_TYPE_NOT_SUPPORTED = 0x08;
@@ -23,6 +26,8 @@ public class SocksServer {
     private final int RESERVED = 0x00;
 
     private final int ADDRESS_TYPE_IPV4 = 0x01;
+    private final int ADDRESS_TYPE_DOMAIN_NAME = 0x03;
+    private final int ADDRESS_TYPE_IPV6 = 0x04;
 
     private record TargetAddress(String host, int port, int addressType, byte[] addressBytes, byte[] portBytes) {
     }
@@ -100,7 +105,7 @@ public class SocksServer {
         dump(requestId, "authMethodHeader", authMethodRequestHeader, 2);
 
         if (authMethodRequestHeader[0] != SOCKS_VERSION) {
-            throw new IllegalArgumentException("socks version is not suppoerted");
+            throw new IllegalArgumentException("socks version is not supported");
         }
 
         int methodsNum = authMethodRequestHeader[1] & 0xFF;
@@ -135,24 +140,24 @@ public class SocksServer {
         dump(requestId, "SocksRequestHeader", socksRequestHeader, 4);
 
         if (socksRequestHeader[0] != SOCKS_VERSION) {
-            throw new IllegalArgumentException("socks version is not suppoerted");
+            throw new IllegalArgumentException("socks version is not supported");
         }
 
         if (socksRequestHeader[1] != CMD_CONNECT) {
             out.write(
-                    bytes(SOCKS_VERSION, REPLY_COMMAND_NOT_SUPPORTED, ADDRESS_TYPE_IPV4,
+                    bytes(SOCKS_VERSION, REPLY_COMMAND_NOT_SUPPORTED, RESERVED, ADDRESS_TYPE_IPV4,
                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
-            throw new IllegalArgumentException("command is not suppoerted");
-
+            throw new IllegalArgumentException("command is not supported");
         }
 
         return switch (socksRequestHeader[3]) {
             case ADDRESS_TYPE_IPV4 -> parseIPv4TargetAddress(requestId, in, out);
+            case ADDRESS_TYPE_DOMAIN_NAME -> parseDomainNameTargetAddress(requestId, in, out);
             default -> {
                 out.write(
-                        bytes(SOCKS_VERSION, REPLY_ADDRESS_TYPE_NOT_SUPPORTED, ADDRESS_TYPE_IPV4,
+                        bytes(SOCKS_VERSION, REPLY_ADDRESS_TYPE_NOT_SUPPORTED, RESERVED, ADDRESS_TYPE_IPV4,
                                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
-                throw new IllegalArgumentException("address type is not suppoerted");
+                throw new IllegalArgumentException("address type is not supported");
             }
         };
     }
@@ -174,6 +179,48 @@ public class SocksServer {
         int port = ((portBytes[0] & 0xFF) << 8) | (portBytes[1] & 0xFF);
 
         return new TargetAddress(host, port, ADDRESS_TYPE_IPV4, hostBytes, portBytes);
+    }
+
+    private TargetAddress parseDomainNameTargetAddress(long requestId, InputStream in, OutputStream out)
+            throws IOException {
+        byte[] domainNameLengthBytes = in.readNBytes(1);
+        if (domainNameLengthBytes.length < 1) {
+            throw new IllegalArgumentException("domain name length is invalid");
+        }
+
+        int domainNameLength = domainNameLengthBytes[0] & 0xFF;
+        byte[] domainBytes = in.readNBytes(domainNameLength);
+        if (domainBytes.length < domainNameLength) {
+            throw new IllegalArgumentException("domain name is too short");
+        }
+
+        byte[] portBytes = in.readNBytes(2);
+        if (portBytes.length < 2) {
+            throw new IllegalArgumentException("port size is too small");
+        }
+
+        dump(requestId, "domainNameLength", domainNameLengthBytes, 1);
+        dump(requestId, "domain", domainBytes, domainNameLength);
+        dump(requestId, "port", portBytes, 2);
+
+        String domainName = new String(domainBytes);
+        int port = ((portBytes[0] & 0xFF) << 8) | (portBytes[1] & 0xFF);
+
+        InetAddress address;
+        try {
+            address = InetAddress.getByName(domainName);
+        } catch (UnknownHostException e) {
+            out.write(bytes(SOCKS_VERSION, REPLY_HOST_UNREACHABLE, RESERVED, ADDRESS_TYPE_IPV4,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
+            throw e;
+        }
+        print(requestId, "%s is resolved: %s", domainName, address.getHostAddress());
+
+        byte[] resolvedAddress = address.getAddress();
+
+        int addressType = resolvedAddress.length == 4 ? ADDRESS_TYPE_IPV4 : ADDRESS_TYPE_IPV6;
+
+        return new TargetAddress(address.getHostAddress(), port, addressType, resolvedAddress, portBytes);
     }
 
     private void respondSocksRequest(long requestId, OutputStream out, TargetAddress address) throws IOException {
