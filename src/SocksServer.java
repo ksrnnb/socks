@@ -13,6 +13,20 @@ public class SocksServer {
 
     private final int NO_ACCEPTABLE_METHODS = 0xFF;
 
+    private final int CMD_CONNECT = 0x01;
+
+    private final int REPLY_SUCCEEDED = 0x00;
+    private final int REPLY_CONNECTION_REFUSED = 0x05;
+    private final int REPLY_COMMAND_NOT_SUPPORTED = 0x07;
+    private final int REPLY_ADDRESS_TYPE_NOT_SUPPORTED = 0x08;
+
+    private final int RESERVED = 0x00;
+
+    private final int ADDRESS_TYPE_IPV4 = 0x01;
+
+    private record TargetAddress(String host, int port, int addressType, byte[] addressBytes, byte[] portBytes) {
+    }
+
     public void run() throws IOException {
         System.out.println("socks server is running on localhost:" + port);
 
@@ -39,36 +53,42 @@ public class SocksServer {
             OutputStream out = socket.getOutputStream();
 
             handleAuthRequest(requestId, in, out);
+
+            TargetAddress address = parseTargetAddress(requestId, in, out);
+
+            Socket targetSocket;
+            try {
+                targetSocket = new Socket(address.host, address.port);
+            } catch (IOException e) {
+                out.write(bytes(SOCKS_VERSION, REPLY_CONNECTION_REFUSED, RESERVED, ADDRESS_TYPE_IPV4,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
+                return;
+            }
+
+            try (targetSocket) {
+                respondSocksRequest(requestId, out, address);
+
+                InputStream targetInput = targetSocket.getInputStream();
+                OutputStream targetOutput = targetSocket.getOutputStream();
+
+                Thread t = Thread.ofVirtual().start(() -> {
+                    try {
+                        pump(targetInput, out);
+                        socket.shutdownOutput();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                });
+
+                pump(in, targetOutput);
+                targetSocket.shutdownOutput();
+                try {
+                    t.join();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
         }
-
-        // String targetHost = "example.com";
-        // int targetPort = 80;
-
-        // try (socket; Socket targetSocket = new Socket(targetHost, targetPort)) {
-
-        // InputStream targetInput = targetSocket.getInputStream();
-        // OutputStream targetOutput = targetSocket.getOutputStream();
-
-        // InputStream in = socket.getInputStream();
-        // OutputStream out = socket.getOutputStream();
-
-        // Thread t = Thread.ofVirtual().start(() -> {
-        // try {
-        // pump(targetInput, out);
-        // socket.shutdownOutput();
-        // } catch (IOException e) {
-        // e.printStackTrace();
-        // }
-        // });
-
-        // pump(in, targetOutput);
-        // targetSocket.shutdownOutput();
-        // try {
-        // t.join();
-        // } catch (InterruptedException e) {
-        // e.printStackTrace();
-        // }
-        // }
     }
 
     private void handleAuthRequest(long requestId, InputStream in, OutputStream out) throws IOException {
@@ -86,7 +106,7 @@ public class SocksServer {
         int methodsNum = authMethodRequestHeader[1] & 0xFF;
         if (methodsNum == 0) {
             out.write(bytes(SOCKS_VERSION, NO_ACCEPTABLE_METHODS));
-            return;
+            throw new IllegalArgumentException("method number is invalid");
         }
 
         byte[] authMethods = in.readNBytes(methodsNum);
@@ -103,7 +123,65 @@ public class SocksServer {
         }
 
         out.write(bytes(SOCKS_VERSION, NO_ACCEPTABLE_METHODS));
-        return;
+        throw new IllegalArgumentException("no acceptable methods");
+    }
+
+    private TargetAddress parseTargetAddress(long requestId, InputStream in, OutputStream out) throws IOException {
+        byte[] socksRequestHeader = in.readNBytes(4);
+        if (socksRequestHeader.length < 4) {
+            throw new IllegalArgumentException("socks request size is too small");
+        }
+
+        dump(requestId, "SocksRequestHeader", socksRequestHeader, 4);
+
+        if (socksRequestHeader[0] != SOCKS_VERSION) {
+            throw new IllegalArgumentException("socks version is not suppoerted");
+        }
+
+        if (socksRequestHeader[1] != CMD_CONNECT) {
+            out.write(
+                    bytes(SOCKS_VERSION, REPLY_COMMAND_NOT_SUPPORTED, ADDRESS_TYPE_IPV4,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
+            throw new IllegalArgumentException("command is not suppoerted");
+
+        }
+
+        return switch (socksRequestHeader[3]) {
+            case ADDRESS_TYPE_IPV4 -> parseIPv4TargetAddress(requestId, in, out);
+            default -> {
+                out.write(
+                        bytes(SOCKS_VERSION, REPLY_ADDRESS_TYPE_NOT_SUPPORTED, ADDRESS_TYPE_IPV4,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
+                throw new IllegalArgumentException("address type is not suppoerted");
+            }
+        };
+    }
+
+    private TargetAddress parseIPv4TargetAddress(long requestId, InputStream in, OutputStream out) throws IOException {
+        byte[] hostBytes = in.readNBytes(4);
+        if (hostBytes.length < 4) {
+            throw new IllegalArgumentException("host size is too small");
+        }
+        byte[] portBytes = in.readNBytes(2);
+        if (portBytes.length < 2) {
+            throw new IllegalArgumentException("port size is too small");
+        }
+        dump(requestId, "ipv4 host", hostBytes, 4);
+        dump(requestId, "ipv4 port", portBytes, 2);
+
+        String host = String.format("%d.%d.%d.%d", hostBytes[0] & 0xFF, hostBytes[1] & 0xFF,
+                hostBytes[2] & 0xFF, hostBytes[3] & 0xFF);
+        int port = ((portBytes[0] & 0xFF) << 8) | (portBytes[1] & 0xFF);
+
+        return new TargetAddress(host, port, ADDRESS_TYPE_IPV4, hostBytes, portBytes);
+    }
+
+    private void respondSocksRequest(long requestId, OutputStream out, TargetAddress address) throws IOException {
+        print(requestId, "CONNECT %s:%d", address.host, address.port);
+
+        out.write(bytes(SOCKS_VERSION, REPLY_SUCCEEDED, RESERVED, address.addressType));
+        out.write(address.addressBytes);
+        out.write(address.portBytes);
     }
 
     private void pump(InputStream in, OutputStream out) throws IOException {
