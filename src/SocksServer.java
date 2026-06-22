@@ -5,6 +5,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 
 public class SocksServer {
     private final int port = 1080;
@@ -65,13 +66,25 @@ public class SocksServer {
             try {
                 targetSocket = new Socket(address.host, address.port);
             } catch (IOException e) {
+                // 失敗理由に応じて応答コードを適切に返す必要があるが、ここでは簡単のため REFUSED とする
                 out.write(bytes(SOCKS_VERSION, REPLY_CONNECTION_REFUSED, RESERVED, ADDRESS_TYPE_IPV4,
                         0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
                 return;
             }
 
             try (targetSocket) {
-                respondSocksRequest(requestId, out, address);
+                // バインドしたアドレスとポート番号を取得
+                InetAddress addr = targetSocket.getLocalAddress();
+                byte[] bindAddress = addr.getAddress();
+                int bindPort = targetSocket.getLocalPort();
+                byte[] bindPortBytes = bytes(bindPort >> 8, bindPort);
+                int addressType = bindAddress.length == 4 ? ADDRESS_TYPE_IPV4 : ADDRESS_TYPE_IPV6;
+
+                print(requestId, "CONNECT %s:%d", address.host, address.port);
+
+                out.write(bytes(SOCKS_VERSION, REPLY_SUCCEEDED, RESERVED, addressType));
+                out.write(bindAddress);
+                out.write(bindPortBytes);
 
                 InputStream targetInput = targetSocket.getInputStream();
                 OutputStream targetOutput = targetSocket.getOutputStream();
@@ -203,7 +216,7 @@ public class SocksServer {
         dump(requestId, "domain", domainBytes, domainNameLength);
         dump(requestId, "port", portBytes, 2);
 
-        String domainName = new String(domainBytes);
+        String domainName = new String(domainBytes, StandardCharsets.US_ASCII);
         int port = ((portBytes[0] & 0xFF) << 8) | (portBytes[1] & 0xFF);
 
         InetAddress address;
@@ -221,14 +234,6 @@ public class SocksServer {
         int addressType = resolvedAddress.length == 4 ? ADDRESS_TYPE_IPV4 : ADDRESS_TYPE_IPV6;
 
         return new TargetAddress(address.getHostAddress(), port, addressType, resolvedAddress, portBytes);
-    }
-
-    private void respondSocksRequest(long requestId, OutputStream out, TargetAddress address) throws IOException {
-        print(requestId, "CONNECT %s:%d", address.host, address.port);
-
-        out.write(bytes(SOCKS_VERSION, REPLY_SUCCEEDED, RESERVED, address.addressType));
-        out.write(address.addressBytes);
-        out.write(address.portBytes);
     }
 
     private void pump(InputStream in, OutputStream out) throws IOException {
