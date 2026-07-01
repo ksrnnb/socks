@@ -8,7 +8,7 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 
 public class SocksServer {
-    private final int port = 1080;
+    private final int PORT = 1080;
 
     private final int SOCKS_VERSION = 0x05;
 
@@ -34,9 +34,9 @@ public class SocksServer {
     }
 
     public void run() throws IOException {
-        System.out.println("socks server is running on localhost:" + port);
+        System.out.println("socks server is running on localhost:" + PORT);
 
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             long id = 1;
             while (true) {
                 final long requestId = id;
